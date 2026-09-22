@@ -1,0 +1,10 @@
+.venv
+.env
+.DS_Store
+__pycache__
+
+# Data is not committed; keep the folders via .gitkeep
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep

@@ -1,0 +1,35 @@
+# California Battery Storage Arbitrage
+
+**Status: in progress**
+
+## Question
+
+How much revenue could a 100 MW / 400 MWh battery have earned by arbitraging CAISO day-ahead and real-time prices from 2021 to 2025, and how much of that is capturable without perfect foresight?
+
+## Planned approach
+
+1. Pull CAISO day-ahead and real-time prices for 2021-2025 with `gridstatus`.
+2. Model the battery as a linear program (`cvxpy`) with round-trip efficiency, state-of-charge limits, cycle limits, and a degradation cost.
+3. Compare three strategies:
+   - **Perfect foresight**: optimal dispatch on known prices (upper bound)
+   - **Rule-based**: simple charge-low / discharge-high schedule
+   - **Forecast-driven**: optimal dispatch on forecast prices, settled at actuals
+4. Publish the results as a Tableau Public dashboard and a one-page market note.
+
+## Repo layout
+
+| Folder | Purpose |
+| --- | --- |
+| `data/raw`, `data/processed` | Downloaded and cleaned price data (not committed) |
+| `src` | Reusable code (data loading, optimizer, strategies) |
+| `notebooks` | Exploration and result write-ups |
+| `tableau` | Dashboard extracts and workbook notes |
+| `reports` | Market note |
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
