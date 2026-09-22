@@ -3,6 +3,10 @@
 Writes one parquet file per month to data/raw, holding both markets and both hubs.
 Months that already have a file are skipped, so an interrupted pull can be re-run.
 
+CAISO's public OASIS API (what gridstatus queries) only keeps roughly the
+trailing 3 years of LMP data. A month older than that has no data available
+at all; this script logs it and moves on rather than stopping the whole pull.
+
 Usage:
     python src/load_prices.py --start 2025-06-01 --end 2025-06-30
 
@@ -14,7 +18,23 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import requests
 from gridstatus import CAISO, Markets
+
+# gridstatus calls requests without a timeout, and requests passes timeout=None to
+# urllib3 in that case -- which explicitly disables the global socket timeout rather
+# than falling back to it. A stalled connection to CAISO's OASIS endpoint can then
+# hang forever. Patch requests itself so every call gets a real timeout, turning a
+# hang into a catchable exception the per-market retry loop below can act on.
+_orig_request = requests.Session.request
+
+
+def _request_with_timeout(self, *args, **kwargs):
+    kwargs.setdefault("timeout", 90)
+    return _orig_request(self, *args, **kwargs)
+
+
+requests.Session.request = _request_with_timeout
 
 RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 HUBS = ["TH_SP15_GEN-APND", "TH_NP15_GEN-APND"]
@@ -22,9 +42,13 @@ HUBS = ["TH_SP15_GEN-APND", "TH_NP15_GEN-APND"]
 MARKETS = {Markets.DAY_AHEAD_HOURLY: 1, Markets.REAL_TIME_15_MIN: 4}
 COLUMNS = ["Interval Start", "Interval End", "Market", "Location", "LMP", "Energy", "Congestion", "Loss"]
 LOCAL_TZ = "US/Pacific"
-RETRIES = 3
+RETRIES = 4  # CAISO's OASIS endpoint is rate-limited and occasionally flaky; worth a few tries
 
 logging.getLogger("gridstatus").setLevel(logging.WARNING)
+
+
+class NoDataError(Exception):
+    """Raised when a month has no data after retries (e.g. outside CAISO's retention window)."""
 
 
 def month_path(month: pd.Period) -> Path:
@@ -44,7 +68,7 @@ def pull_month(iso: CAISO, month: pd.Period, sleep: int) -> pd.DataFrame:
                 break
             except Exception as exc:
                 if attempt == RETRIES:
-                    raise
+                    raise NoDataError(f"{month} {market.value}: {exc!r}") from exc
                 wait = 30 * attempt
                 print(f"  {market.value} attempt {attempt} failed ({exc!r}); retrying in {wait}s")
                 time.sleep(wait)
@@ -57,7 +81,7 @@ def pull_month(iso: CAISO, month: pd.Period, sleep: int) -> pd.DataFrame:
     found = set(zip(out["Market"], out["Location"]))
     missing = {(m.value, h) for m in MARKETS for h in HUBS} - found
     if missing:  # don't write a partial month, or "skip existing" would hide it
-        raise RuntimeError(f"{month}: missing market/hub combos {sorted(missing)}")
+        raise NoDataError(f"{month}: missing market/hub combos {sorted(missing)}")
 
     for col in ("Interval Start", "Interval End"):
         out[col] = out[col].dt.tz_convert("UTC")
@@ -65,21 +89,34 @@ def pull_month(iso: CAISO, month: pd.Period, sleep: int) -> pd.DataFrame:
 
 
 def load_range(start, end, sleep: int = 5) -> list[pd.Period]:
+    """Pull every month in [start, end]. Returns the months actually saved (existing + new);
+    a month with no data available (e.g. older than CAISO's retention window) is logged and skipped."""
     months = list(pd.period_range(pd.Timestamp(start).to_period("M"), pd.Timestamp(end).to_period("M"), freq="M"))
     iso = CAISO()
+    saved = []
+    skipped = []
     for month in months:
         path = month_path(month)
         if path.exists():
             print(f"{month}: already downloaded, skipping")
+            saved.append(month)
             continue
         print(f"{month}: pulling...")
         t0 = time.time()
-        df = pull_month(iso, month, sleep)
+        try:
+            df = pull_month(iso, month, sleep)
+        except NoDataError as exc:
+            print(f"{month}: SKIPPING, no data available ({exc})")
+            skipped.append(month)
+            continue
         tmp = path.with_suffix(".parquet.tmp")  # write-then-rename so a crash never leaves a bad file
         df.to_parquet(tmp, index=False)
         tmp.replace(path)
+        saved.append(month)
         print(f"{month}: saved {len(df):,} rows in {time.time() - t0:.0f}s -> {path.name}")
-    return months
+    if skipped:
+        print(f"\n{len(skipped)} month(s) skipped (no data): {[str(m) for m in skipped]}")
+    return saved
 
 
 def read_months(months: list[pd.Period]) -> pd.DataFrame:
@@ -108,4 +145,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    summarize(read_months(load_range(args.start, args.end, args.sleep)))
+    months = load_range(args.start, args.end, args.sleep)
+    if months:
+        summarize(read_months(months))
+    else:
+        print("\nNo months saved.")

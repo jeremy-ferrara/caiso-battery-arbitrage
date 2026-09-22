@@ -2,13 +2,17 @@
 
 ## Project goal
 
-Backtest battery storage arbitrage in CAISO. Simulate a 100 MW / 400 MWh battery against real CAISO day-ahead and real-time prices (2021-2025, pulled via `gridstatus`) and compare three strategies:
+Backtest battery storage arbitrage in CAISO. Simulate a 100 MW / 400 MWh battery against real CAISO day-ahead and real-time prices (July 2023 - August 2026, pulled via `gridstatus`) and compare three strategies:
 
 1. **Perfect foresight**: optimal dispatch on known prices (upper bound)
 2. **Rule-based**: simple charge-low / discharge-high schedule
 3. **Forecast-driven**: optimal dispatch on forecast prices, settled at actual prices
 
 Deliverables: a Tableau Public dashboard and a one-page market note. This is a portfolio project.
+
+## Data availability
+
+CAISO's public OASIS API (what `gridstatus` queries) only retains roughly the trailing 3 years of LMP data. The original plan targeted 2021-2025; only July 2023 onward is actually pullable, so that's the project's real date range. `src/load_prices.py` logs and skips any month with no data available instead of failing the whole pull, since the retention boundary shifts forward over time.
 
 ## Tech stack
 
