@@ -5,3 +5,4 @@ cvxpy
 matplotlib
 jupyter
 pyarrow
+pytest
