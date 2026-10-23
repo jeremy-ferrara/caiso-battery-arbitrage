@@ -173,6 +173,8 @@ def solve_multiday(prices: pd.Series, config: BatteryConfig = BatteryConfig(),
             "gross_revenue": result.gross_revenue,
             "degradation_cost": result.degradation_cost,
             "net_profit": result.net_profit,
+            "charged_mwh": float(result.charge_mw.sum()) * config.dt_hours,
+            "discharged_mwh": float(result.discharge_mw.sum()) * config.dt_hours,
             "n_hours": len(day_prices),
         })
 
