@@ -19,16 +19,17 @@ def synthetic_prices(start="2024-01-01", days=60, seed=0) -> pd.Series:
     return pd.Series(base + rng.normal(0, 5, len(index)), index=index, name="LMP")
 
 
-def test_no_lookahead_scrambling_future_leaves_forecast_unchanged():
+@pytest.mark.parametrize("window_days", [None, 10])
+def test_no_lookahead_scrambling_future_leaves_forecast_unchanged(window_days):
     prices = synthetic_prices()
-    full = walk_forward_forecast(prices)
+    full = walk_forward_forecast(prices, window_days=window_days)
     target = pd.Timestamp("2024-02-15").date()
     local_dates = prices.index.tz_convert(LOCAL_TZ).date
 
     scrambled = prices.copy()
     future = local_dates >= target
     scrambled[future] = np.random.default_rng(99).uniform(-500, 2000, future.sum())
-    altered = walk_forward_forecast(scrambled)
+    altered = walk_forward_forecast(scrambled, window_days=window_days)
 
     on_target = full.index.tz_convert(LOCAL_TZ).date == target
     assert on_target.sum() == 24
@@ -36,6 +37,30 @@ def test_no_lookahead_scrambling_future_leaves_forecast_unchanged():
                                full.loc[on_target, "forecast"], rtol=0, atol=1e-9)
     # Sanity: the scrambling does change actuals for the target day (so the test isn't vacuous).
     assert not np.allclose(altered.loc[full.index[on_target], "actual"], full.loc[on_target, "actual"])
+
+
+def test_rolling_window_ignores_data_older_than_window_plus_lags():
+    # Training rows are dated >= D - window; their lag features reach back 7 more days.
+    # Anything older than that must not affect D's forecast.
+    window = 10
+    prices = synthetic_prices()
+    target = pd.Timestamp("2024-02-15").date()
+    cutoff = target - pd.Timedelta(days=window + 7)
+    local_dates = prices.index.tz_convert(LOCAL_TZ).date
+    old = local_dates < cutoff
+    scrambled = prices.copy()
+    scrambled[old] = np.random.default_rng(7).uniform(-500, 2000, old.sum())
+
+    full = walk_forward_forecast(prices, window_days=window)
+    altered = walk_forward_forecast(scrambled, window_days=window)
+    on_target = full.index.tz_convert(LOCAL_TZ).date == target
+    np.testing.assert_allclose(altered.loc[full.index[on_target], "forecast"],
+                               full.loc[on_target, "forecast"], rtol=0, atol=1e-9)
+    # The expanding model does see that old data, so it should change (test isn't vacuous).
+    exp_full = walk_forward_forecast(prices)
+    exp_altered = walk_forward_forecast(scrambled)
+    assert not np.allclose(exp_altered.loc[full.index[on_target], "forecast"],
+                           exp_full.loc[full.index[on_target], "forecast"])
 
 
 def test_first_forecast_day_respects_lags_and_min_training():

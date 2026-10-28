@@ -19,7 +19,8 @@ Features for day D, local hour h (all from days strictly before D):
                  months during its first year, so per-month dummies would be unfit.
 
 Model. One ridge regression per local hour (24 models), refit from scratch for every
-target day on all earlier days (expanding window). Features are standardized with the
+target day on all earlier days (expanding window), or with `window_days` set, only on the
+earlier days within that many calendar days of the target (rolling window). Features are standardized with the
 training rows' mean and std only. The penalty and the feature list are fixed up front,
 not tuned on backtest results, since tuning on the test period would also leak.
 
@@ -103,9 +104,12 @@ def fit_ridge(x: np.ndarray, y: np.ndarray, alpha: float = RIDGE_ALPHA):
 
 
 def walk_forward_forecast(prices: pd.Series, local_tz: str = LOCAL_TZ,
-                          min_train_days: int = MIN_TRAIN_DAYS, alpha: float = RIDGE_ALPHA) -> pd.DataFrame:
+                          min_train_days: int = MIN_TRAIN_DAYS, alpha: float = RIDGE_ALPHA,
+                          window_days: int | None = None) -> pd.DataFrame:
     """Hourly forecasts for every Pacific day that has complete features and at least
     `min_train_days` complete earlier days to train on. Indexed by the actual UTC hours.
+    window_days=None trains on all earlier days (expanding); an integer keeps only training
+    days in [target - window_days, target). The first forecast day is the same either way.
 
     Columns: actual, forecast (ridge), persistence (= lag1), mean7 (trailing 7-day same-hour
     mean). Prices in $/MWh. The two naive columns are baselines for accuracy comparison."""
@@ -119,6 +123,8 @@ def walk_forward_forecast(prices: pd.Series, local_tz: str = LOCAL_TZ,
     for i in range(min_train_days, len(days)):
         target = days[i]
         train = days[:i]  # strictly before target
+        if window_days is not None:
+            train = train[train >= target - pd.Timedelta(days=window_days)]
         row = []
         for h in range(24):
             f = features[h]
